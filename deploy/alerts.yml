@@ -1,0 +1,156 @@
+# Nightwire alert rules for Prometheus.
+#
+# These rules are the point, not the /metrics endpoint. A deployment
+# this runs on had Prometheus scraping node_exporter with no rules and no
+# Alertmanager, which is why three cameras recorded nothing for days in
+# October 2026 and nothing fired. Metrics without rules is how that happens.
+#
+# Install:
+#   1. Copy this file to the Prometheus host, e.g.
+#      /etc/prometheus/rules/nightwire.yml
+#   2. Reference it from prometheus.yml:
+#        rule_files:
+#          - /etc/prometheus/rules/nightwire.yml
+#   3. Add the scrape job:
+#        scrape_configs:
+#          - job_name: nightwire
+#            static_configs:
+#              - targets: ['<nvr-host>:8080']
+#   4. Reload: `curl -X POST http://localhost:9090/-/reload` or restart.
+#
+# An alert with nowhere to go is not an alert. Alertmanager must exist and
+# have a receiver, or these rules only change a colour on a page nobody has
+# open. Treat the setup as incomplete until NightwireRecorderStopped has been seen to
+# arrive wherever notifications are actually read.
+
+groups:
+  - name: nightwire
+    interval: 30s
+    rules:
+      - alert: NightwireDown
+        expr: up{job="nightwire"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Nightwire is not responding
+          description: >-
+            The NVR has not answered a scrape for 5 minutes. Nothing is being
+            recorded. Check the container with `docker compose ps` and
+            `docker compose logs nvr`.
+
+      - alert: NightwireRecorderStopped
+        expr: nightwire_recorder_recording == 0 and on(camera) nightwire_camera_retention_days > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.camera }} is not recording"
+          description: >-
+            The recorder for {{ $labels.camera }} has not been in the
+            recording state for 10 minutes. This is the alert whose absence
+            let three cameras record nothing for days. Check the camera's
+            card on Nodes for the ffmpeg log.
+
+      - alert: NightwireNoNewSegments
+        expr: nightwire_recorder_seconds_since_segment > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.camera }} has written no footage for 5 minutes"
+          description: >-
+            The recorder reports running but no segment has been indexed for
+            {{ $value | humanizeDuration }}. This catches a stream that is
+            connected but delivering nothing, which looks healthy from the
+            process's side.
+
+      - alert: NightwireRecordingsVolumeMissing
+        expr: nightwire_recordings_volume_present == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The recordings volume is not there
+          description: >-
+            Nightwire cannot read the recordings volume, so nothing can be
+            written. Check the mount on the host and that the compose volume
+            still points at it. Note that the scrape deliberately keeps
+            working in this state, so this alert can fire at all.
+
+      - alert: NightwireDiskFilling
+        expr: nightwire_disk_used_percent > nightwire_disk_max_percent
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: The recordings volume is above its ceiling
+          description: >-
+            The volume is {{ $value | printf "%.1f" }}% used, above the
+            configured ceiling, so the retention guard is deleting footage
+            before its retention window expires. Lower a camera's bitrate cap
+            or add space.
+
+      - alert: NightwireRetentionShort
+        expr: nightwire_projected_retention_days < nightwire_camera_retention_days
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.camera }} will not keep its full retention"
+          description: >-
+            At the current combined write rate the volume holds
+            {{ $value | printf "%.0f" }} days, short of this camera's
+            configured retention. Footage will be deleted early. Lower the
+            bitrate cap on the camera or add space.
+
+      - alert: NightwireExportStoreFull
+        expr: >-
+          nightwire_exports_store_bytes / nightwire_exports_store_cap_bytes > 0.9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The export store is nearly full
+          description: >-
+            Saved clips are at {{ $value | humanizePercentage }} of the cap.
+            New exports will be refused once it is reached. Delete clips from
+            Vault. Note that retention never deletes an export, which is why
+            this needs attention rather than resolving itself.
+
+      - alert: NightwireEventListenerDown
+        expr: >-
+          nightwire_events_subscribed == 0
+          and on(camera) nightwire_event_sources_enabled > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.camera }} is not reporting motion"
+          description: >-
+            This camera has event sources configured but its listener is not
+            subscribed, so motion markers are silently missing from the
+            timeline. Recording is unaffected.
+
+      - alert: NightwireCameraClockSkew
+        expr: abs(nightwire_camera_clock_offset_seconds) > 2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.camera }}'s clock is off by {{ $value | printf \"%.1f\" }}s"
+          description: >-
+            Event times come from the camera's clock and footage from the
+            NVR's. Nightwire corrects the offset, but a drifting camera means
+            the correction is chasing a moving target. Set NTP on the camera.
+
+      - alert: NightwireGo2rtcDown
+        expr: nightwire_go2rtc_running == 0 and nightwire_cameras_enabled > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Live video is not running
+          description: >-
+            go2rtc is not answering, so Feeds and the station show nothing.
+            Recording pulls RTSP straight from the cameras and is unaffected.

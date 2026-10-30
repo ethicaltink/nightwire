@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Nightwire</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <!-- go2rtc's player is vendored by scripts/fetch-go2rtc-assets.sh and
+         loaded by src/lib/player.js, not from here: it is an ES module, and
+         a plain <script src> tag threw on its `export` before any of it ran,
+         so <video-stream> never registered. See that file. -->
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

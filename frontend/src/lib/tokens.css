@@ -1,0 +1,99 @@
+/* The single source of colour, glow and type for the whole UI.
+ *
+ * Every value in the design tokens lives here and nowhere else. No
+ * component may carry a raw hex value or rgba() colour; if a shade is
+ * missing, add a token here first.
+ *
+ * Fonts are served from /fonts by FastAPI and vendored by
+ * scripts/fetch-fonts.sh. This app is LAN-only and never fetches a font at
+ * runtime. Each family declares a system fallback so a missing .woff2
+ * degrades instead of breaking.
+ */
+
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/chakra-petch-600.woff2') format('woff2'),
+       url('/fonts/chakra-petch-600.ttf') format('truetype');
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/chakra-petch-700.woff2') format('woff2'),
+       url('/fonts/chakra-petch-700.ttf') format('truetype');
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/inter-400.woff2') format('woff2'),
+       url('/fonts/inter-400.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/inter-500.woff2') format('woff2'),
+       url('/fonts/inter-500.ttf') format('truetype');
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/inter-600.woff2') format('woff2'),
+       url('/fonts/inter-600.ttf') format('truetype');
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/jetbrains-mono-400.woff2') format('woff2'),
+       url('/fonts/jetbrains-mono-400.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  /* Surfaces and text */
+  --ground: #0a0612;
+  --panel: #120b1f;
+  --tile: #1a1030;
+  --border: #2e1f4d;
+  --border-subtle: #4a3478;
+  --text: #ede9f7;
+  --text-secondary: #a99bc9;
+  --text-muted: #9384b8;
+  --text-faint: #6a5a90;
+  --black: #000000;
+
+  /* Accents */
+  --cyan: #00f0ff;
+  --cyan-bright: #7df9ff;
+  --magenta: #ff2e88;
+  --motion-magenta: #ff2bd6;
+  --green: #39ff88;
+  --yellow: #fcee0a;
+  --purple: #7b2fd0;
+  --purple-bright: #9d5cff;
+  --orange: #ff8a1e;
+  --lavender: #c9a6ff;
+
+  /* Glows, expressed as tokens so no component carries a raw rgba() */
+  --glow-cyan-soft: 0 0 12px rgb(0 240 255 / 0.35);
+  --glow-cyan-strong: 0 0 16px rgb(0 240 255 / 0.55);
+  --glow-motion: 0 0 16px rgb(255 43 214 / 0.55);
+  --drop-glow-cyan: drop-shadow(0 0 4px rgb(0 240 255 / 0.55));
+  --drop-glow-cyan-lg: drop-shadow(0 0 5px rgb(0 240 255 / 0.55));
+  --text-glow-cyan: 0 0 12px rgb(0 240 255 / 0.55);
+
+  /* Type */
+  --font-head: 'Chakra Petch', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* Layout */
+  --gutter: 16px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --touch: 44px;
+}

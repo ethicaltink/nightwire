@@ -1,0 +1,19 @@
+.git
+.gitignore
+.venv
+venv
+node_modules
+frontend/node_modules
+frontend/dist
+src/nightwire/static/*
+# `**/` matters: a bare `__pycache__` pattern matches only the top level, so
+# nested bytecode was being copied into the image. It shadowed nothing (the
+# installed package is what runs) but it shipped stale compiled copies of
+# source that had since changed.
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.env
+config
+recordings
+design/*.png

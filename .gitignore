@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Frontend
+node_modules/
+frontend/dist/
+# Built frontend is copied here by `npm run build`; the image builds it instead.
+src/nightwire/static/*
+!src/nightwire/static/.gitkeep
+
+# Local state
+.env
+config/
+recordings/
+*.db
+*.db-wal
+*.db-shm
+
+# Vendored at image build time, not committed
+frontend/public/fonts/*.woff2
+frontend/public/fonts/*.ttf
+frontend/public/video-rtc.js
+
+# Local working notes and design references, not part of the distribution.
+/SPEC.md
+/PROMPTS.md
+/CHANGELOG.md
+/CLAUDE.md
+/design/

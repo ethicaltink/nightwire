@@ -1,0 +1,44 @@
+# Optional seed file, mounted at /config/config.yaml.
+#
+# On boot, any camera here that is not already in the database is inserted, so
+# a redeploy can be declarative. Existing rows are left alone unless
+# NVR_CONFIG_AUTHORITATIVE=true, in which case this file wins.
+#
+# Passwords use ${VAR} and are read from the environment. Never write a camera
+# password into this file.
+
+retention_days: 45
+max_disk_percent: 90
+target_disk_percent: 85
+segment_seconds: 60
+
+cameras:
+  - id: front
+    name: Front Door
+    host: 192.168.1.101
+    onvif_port: 80
+    username: nvr
+    password: ${CAM_FRONT_PASS}
+    # Either name the ONVIF profiles created on the camera...
+    profile_main: nvr-main
+    profile_sub: nvr-sub
+    retention_days: 45
+
+  - id: drive
+    name: Driveway
+    host: 192.168.1.102
+    username: nvr
+    password: ${CAM_DRIVE_PASS}
+    profile_main: nvr-main
+    profile_sub: nvr-sub
+
+  - id: yard
+    name: Backyard
+    host: 192.168.1.103
+    username: nvr
+    password: ${CAM_YARD_PASS}
+    # ...or give the RTSP URLs directly, skipping ONVIF resolution entirely.
+    # ...or give the RTSP URIs directly. The path is vendor-specific; read
+    # it from the camera, or let a probe fill it in from ONVIF.
+    # main_uri: rtsp://192.168.1.103/onvif-media/media.amp?profile=nvr-main
+    # sub_uri: rtsp://192.168.1.103/onvif-media/media.amp?profile=nvr-sub

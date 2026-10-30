@@ -1,0 +1,140 @@
+/* Base layout and shared primitives. Colours come from tokens.css only. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+a {
+  color: var(--cyan);
+}
+a:hover {
+  color: var(--cyan-bright);
+}
+
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-head);
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+/* Shared controls, sized to the 44px touch target the spec requires. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: var(--touch);
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--cyan);
+  color: var(--ground);
+  box-shadow: var(--glow-cyan-soft);
+  font: 600 15px var(--font-body);
+  text-decoration: none;
+  cursor: pointer;
+}
+.button:hover:not(:disabled) {
+  background: var(--cyan-bright);
+  color: var(--ground);
+}
+.button:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.button-quiet {
+  display: inline-flex;
+  align-items: center;
+  height: var(--touch);
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: 500 14px var(--font-body);
+  text-decoration: none;
+  cursor: pointer;
+}
+.button-quiet:hover {
+  color: var(--text);
+}
+
+.input {
+  height: var(--touch);
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--ground);
+  color: var(--text);
+  font: 400 15px var(--font-body);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.dot.ok {
+  background: var(--green);
+}
+.dot.warn {
+  background: var(--yellow);
+}
+.dot.bad {
+  background: var(--magenta);
+}
+
+.hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}

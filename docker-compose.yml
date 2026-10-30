@@ -1,0 +1,18 @@
+services:
+  nvr:
+    build: .
+    image: nightwire:local
+    container_name: nightwire
+    network_mode: host                     # WS-Discovery multicast + WebRTC
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # .env supplies NVR_PASSWORD, NVR_SECRET_KEY, TZ, PUID, PGID, NVR_PORT.
+      # The app refuses to start if either secret is empty or an example value.
+      NVR_PORT: "${NVR_PORT:-8080}"
+    volumes:
+      - ./config:/config
+      - ./recordings:/recordings           # point this at the 8 TB volume
+    tmpfs:
+      - /tmp/nvr
+    stop_grace_period: 30s                 # let ffmpeg close segments

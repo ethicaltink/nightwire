@@ -1,0 +1,21 @@
+{
+  "name": "nightwire-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:local": "vite build --outDir ../src/nightwire/static --emptyOutDir",
+    "preview": "vite preview",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.1.2",
+    "svelte": "^4.2.19",
+    "vite": "^5.4.11"
+  },
+  "dependencies": {
+    "hls.js": "^1.5.17"
+  }
+}
