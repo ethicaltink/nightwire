@@ -11,6 +11,7 @@
   import EventsPanel from '../lib/EventsPanel.svelte';
   import { clipRange, currentEvent, nextEvent, prevEvent, seekTarget } from '../lib/motion.js';
   import { api, ApiError } from '../lib/api.js';
+  import { fragmentsOf, mediaTimeFor, wallClockFor } from '../lib/playclock.js';
   import { link, location, navigate } from '../lib/router.js';
   import {
     MINUTE,
@@ -37,6 +38,9 @@
   let recordedDays = [];
   let serverToday = '';
   let calendarOpen = false;
+  // A seek asked for before the playlist loaded. Applied on the first level
+  // load, because only then is the program-date-time mapping available.
+  let pendingSeek = null;
   let window = { start: 0, end: 0 };
   let playhead = null;
   let error = '';
@@ -199,8 +203,15 @@
       hls = new Hls({ lowLatencyMode: false, backBufferLength: 90 });
       hls.loadSource(url);
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (seekTo !== null) seekToMoment(seekTo);
+      if (seekTo !== null) pendingSeek = seekTo;
+      // LEVEL_LOADED, not MANIFEST_PARSED: the fragments and their
+      // EXT-X-PROGRAM-DATE-TIME only exist once the level itself has loaded,
+      // and seeking before that has nothing to map against.
+      hls.on(Hls.Events.LEVEL_LOADED, () => {
+        if (pendingSeek === null) return;
+        const target = pendingSeek;
+        pendingSeek = null;
+        seekToMoment(target);
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data?.fatal) return;
@@ -233,24 +244,34 @@
    */
   function seekToMoment(atMs) {
     if (!video) return;
-    if (hls?.playingDate !== undefined && typeof hls.setPlayingDate === 'function') {
-      try {
-        hls.setPlayingDate(new Date(atMs));
-        return;
-      } catch {
-        /* fall through to the offset estimate below */
-      }
+    const fragments = fragmentsOf(hls);
+    if (fragments.length) {
+      video.currentTime = mediaTimeFor(fragments, atMs);
+      return;
     }
-    // Fallback: offset from the start of the day's playlist.
-    const seconds = (atMs - bounds.start) / 1000;
-    if (Number.isFinite(seconds)) video.currentTime = Math.max(0, seconds);
+    // The playlist has not loaded yet. Remember where we were asked for and
+    // seek once it does, rather than guessing an offset: media time 0 is the
+    // day's first recorded frame, not midnight, so any guess is wrong by the
+    // length of every gap before the target.
+    pendingSeek = atMs;
   }
 
   /** Player position back to wall clock, for the playhead. */
   function currentMoment() {
     if (!video) return null;
+    // Our own mapping first, hls.js's `playingDate` only as a fallback. The
+    // two disagree on a day with gaps: `playingDate` drifted 24 minutes from
+    // the requested moment across 15 discontinuities, while walking the
+    // fragments' own EXT-X-PROGRAM-DATE-TIME is exact and is the inverse of
+    // the mapping used to seek, so the playhead cannot disagree with where
+    // the seek landed.
+    const fragments = fragmentsOf(hls);
+    if (fragments.length) {
+      const at = wallClockFor(fragments, video.currentTime);
+      if (at !== null) return at;
+    }
     if (hls?.playingDate instanceof Date) return hls.playingDate.getTime();
-    return bounds.start + video.currentTime * 1000;
+    return null;
   }
 
   function onTimeUpdate() {
