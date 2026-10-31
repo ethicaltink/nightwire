@@ -6,6 +6,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Timeline from '../lib/Timeline.svelte';
+  import Calendar from '../lib/Calendar.svelte';
   import EventLanes from '../lib/EventLanes.svelte';
   import EventsPanel from '../lib/EventsPanel.svelte';
   import { clipRange, currentEvent, nextEvent, prevEvent, seekTarget } from '../lib/motion.js';
@@ -30,6 +31,12 @@
   let cameraId = '';
   let date = localDate(Date.now());
   let timeline = null;
+  // Which days have footage, for the calendar. Loaded per camera and
+  // refreshed when the day changes, so a day that starts recording while
+  // Rewind is open becomes selectable without a reload.
+  let recordedDays = [];
+  let serverToday = '';
+  let calendarOpen = false;
   let window = { start: 0, end: 0 };
   let playhead = null;
   let error = '';
@@ -63,6 +70,19 @@
       if (!cameraId && cameras.length) cameraId = cameras[0].id;
     } catch (err) {
       error = err instanceof ApiError ? err.message : String(err);
+    }
+  }
+
+  /** Which days this camera has footage on. Never fatal: without it the
+      calendar simply offers nothing, and the date can still be deep-linked. */
+  async function loadDays() {
+    if (!cameraId) return;
+    try {
+      const result = await api.days(cameraId);
+      recordedDays = result.days ?? [];
+      serverToday = result.today ?? '';
+    } catch {
+      recordedDays = [];
     }
   }
 
@@ -314,7 +334,7 @@
   }
 
   async function changeDay(seekTo = null) {
-    await loadTimeline();
+    await Promise.all([loadTimeline(), loadDays()]);
     const target = seekTo ?? bounds.start;
     window = windowAround(target, window.end - window.start || 60 * MINUTE, bounds);
     await openPlaylist(target);
@@ -368,7 +388,17 @@
     const at = parseMoment(new URLSearchParams(globalThis.location.search).get('t'));
     if (at !== null) date = localDate(at);
     window = windowAround(at ?? bounds.start, 60 * MINUTE, bounds);
-    await loadTimeline();
+    await Promise.all([loadTimeline(), loadDays()]);
+    // With no deep link, open on the most recent day that actually has
+    // footage rather than on today, which may be empty on a fresh install
+    // or after an outage.
+    if (at === null && recordedDays.length) {
+      const latest = recordedDays[recordedDays.length - 1].date;
+      if (latest !== date) {
+        date = latest;
+        await loadTimeline();
+      }
+    }
     // Without a deep link the detail view used to open on midnight, so a day
     // with footage showed an empty hour and you had to hunt for it. Open on
     // the newest footage instead, which is what anyone opening Rewind is
@@ -410,10 +440,33 @@
         {/each}
       </select>
     </label>
-    <label class="field">
-      Date
-      <input class="input" type="date" bind:value={date} on:change={() => changeDay()} />
-    </label>
+    <div class="field datefield">
+      <span>Date</span>
+      <button
+        class="input datebutton"
+        on:click={() => (calendarOpen = !calendarOpen)}
+        title="Pick a day with footage"
+      >
+        {date}
+        <span class="hint">{recordedDays.length ? `${recordedDays.length} day${recordedDays.length === 1 ? '' : 's'}` : 'no footage'}</span>
+      </button>
+      {#if calendarOpen}
+        <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+        <div class="scrim" on:click={() => (calendarOpen = false)}></div>
+        <div class="popover">
+          <Calendar
+            selected={date}
+            days={recordedDays}
+            today={serverToday}
+            on:pick={(event) => {
+              calendarOpen = false;
+              date = event.detail;
+              changeDay();
+            }}
+          />
+        </div>
+      {/if}
+    </div>
     <span class="hint playhead mono">
       {playhead === null ? '--:--:--' : formatClock(playhead)}
     </span>
@@ -607,6 +660,43 @@
     gap: 4px;
     font-size: 12px;
     color: var(--text-secondary);
+  }
+
+  /* The date control is a button that opens the calendar, not a native date
+     input: the point is to offer only the days that have footage, which a
+     native picker cannot express. */
+  .datefield {
+    position: relative;
+  }
+
+  .datebutton {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    color: var(--text-primary);
+  }
+
+  .datebutton:hover {
+    border-color: var(--cyan);
+  }
+
+  /* Closes the popover on any click outside it, without a document-level
+     listener that would also fire on the button that opened it. */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+  }
+
+  .popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 21;
   }
 
   .playhead {

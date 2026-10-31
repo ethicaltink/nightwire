@@ -83,6 +83,7 @@ export const api = {
 
   // playback
   timeline: (id, date) => request(`/api/cameras/${id}/timeline?date=${encodeURIComponent(date)}`),
+  days: (id) => request(`/api/cameras/${id}/days`),
   segmentAt: (id, at) => request(`/api/cameras/${id}/segment?t=${at}`),
   vodUrl: (id, date) => `/api/cameras/${id}/vod.m3u8?date=${encodeURIComponent(date)}`,
   thumbUrl: (id, at) => `/api/cameras/${id}/thumb?t=${at}`,

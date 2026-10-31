@@ -26,10 +26,3 @@ recordings/
 frontend/public/fonts/*.woff2
 frontend/public/fonts/*.ttf
 frontend/public/video-rtc.js
-
-# Local working notes and design references, not part of the distribution.
-/SPEC.md
-/PROMPTS.md
-/CHANGELOG.md
-/CLAUDE.md
-/design/

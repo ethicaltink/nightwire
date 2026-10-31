@@ -73,6 +73,53 @@ def _window(request: Request, date: str | None, start: int | None, end: int | No
     return timeline_mod.day_bounds(day, tz)
 
 
+@router.get("/cameras/{camera_id}/days")
+def camera_days(camera_id: str, request: Request) -> JSONResponse:
+    """Which local days have footage for this camera.
+
+    The calendar on Rewind offers only these, so a date cannot be picked
+    that lands on an empty page. Deliberately one query over the whole
+    `segments` table for this camera rather than a window: the index on
+    (camera_id, start_ts) makes it cheap, a 45-day archive is at most 45
+    rows out, and the calendar wants to know about months it has not shown
+    yet.
+    """
+    conn = request.app.state.db
+    tz = request.app.state.settings.tzinfo()
+    try:
+        repo.get_row(conn, camera_id)
+    except Exception as exc:  # noqa: BLE001
+        return _error(str(exc), 404)
+
+    rows = conn.execute(
+        "SELECT id, start_ts, end_ts, duration_ms, path, size_bytes, has_audio"
+        " FROM segments WHERE camera_id = ? ORDER BY start_ts",
+        (camera_id,),
+    )
+    segments = [
+        timeline_mod.Segment(
+            id=row["id"],
+            start_ts=row["start_ts"],
+            end_ts=row["end_ts"],
+            duration_ms=row["duration_ms"],
+            path=row["path"],
+            size_bytes=row["size_bytes"],
+            has_audio=bool(row["has_audio"]),
+        )
+        for row in rows
+    ]
+    days = timeline_mod.days_with_footage(segments, tz)
+    return JSONResponse(
+        {
+            "camera_id": camera_id,
+            "days": days,
+            "first": days[0]["date"] if days else None,
+            "last": days[-1]["date"] if days else None,
+            "today": datetime.now(tz).strftime("%Y-%m-%d"),
+        }
+    )
+
+
 @router.get("/cameras/{camera_id}/timeline")
 def camera_timeline(
     camera_id: str,

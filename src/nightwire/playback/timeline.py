@@ -78,6 +78,40 @@ def day_bounds(date_text: str, tz=None) -> tuple[int, int]:
     return int(start.timestamp() * 1000), int(next_day.timestamp() * 1000)
 
 
+def local_day(at_ms: int, tz=None) -> str:
+    """The `YYYY-MM-DD` a moment falls on, in the display time zone."""
+    moment = datetime.fromtimestamp(at_ms / 1000, tz) if tz is not None else (
+        datetime.fromtimestamp(at_ms / 1000)
+    )
+    return moment.strftime("%Y-%m-%d")
+
+
+def days_with_footage(segments: list[Segment], tz=None) -> list[dict]:
+    """Which local days have recordings, and how much.
+
+    The calendar on Rewind uses this to offer only the days that exist, so
+    picking a date cannot land on an empty page. A segment is counted on the
+    day it **starts**: one that straddles local midnight belongs to the day
+    it began, which keeps a day's totals from double-counting.
+
+    Pure, so the day arithmetic is testable without a database. Returns
+    oldest first: `[{"date", "segments", "bytes", "seconds"}]`.
+    """
+    tally: dict[str, dict] = {}
+    for segment in segments:
+        day = local_day(segment.start_ts, tz)
+        entry = tally.setdefault(
+            day, {"date": day, "segments": 0, "bytes": 0, "seconds": 0.0}
+        )
+        entry["segments"] += 1
+        entry["bytes"] += getattr(segment, "size_bytes", 0) or 0
+        entry["seconds"] += (segment.duration_ms or 0) / 1000
+    return [
+        {**entry, "seconds": round(entry["seconds"])}
+        for _, entry in sorted(tally.items())
+    ]
+
+
 def overlapping(segments: list[Segment], start_ms: int, end_ms: int) -> list[Segment]:
     """Segments that overlap a window at all, in chronological order.
 

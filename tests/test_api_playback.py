@@ -299,3 +299,54 @@ def test_segment_info_reports_the_nearest_when_nothing_covers_the_moment(signed_
 def test_segment_info_without_footage_is_404(signed_in):
     add(signed_in)
     assert signed_in.get("/api/cameras/front/segment?t=1793000000000").status_code == 404
+
+
+# ------------------------------------- which days have footage, for the UI
+
+
+def local_midnight_ms(client, date_text: str) -> int:
+    """Local midnight for a date, in the app's display time zone."""
+    from nightwire.playback import timeline as timeline_mod
+
+    tz = client.app.state.settings.tzinfo()
+    return timeline_mod.day_bounds(date_text, tz)[0]
+
+
+def test_days_lists_only_days_with_footage(signed_in, recordings):
+    """The Rewind calendar offers these, so a date cannot land on an empty page."""
+    add(signed_in)
+    write_segments(signed_in, "front", 2, local_midnight_ms(signed_in, "2026-10-28") + 9 * HOUR)
+    write_segments(signed_in, "front", 1, local_midnight_ms(signed_in, "2026-10-30") + 14 * HOUR)
+
+    body = signed_in.get("/api/cameras/front/days").json()
+    assert [d["date"] for d in body["days"]] == ["2026-10-28", "2026-10-30"]
+    assert body["days"][0]["segments"] == 2
+    assert body["days"][0]["seconds"] == 120
+    assert body["first"] == "2026-10-28"
+    assert body["last"] == "2026-10-30"
+    assert body["today"]
+
+
+def test_days_counts_a_segment_on_the_day_it_starts(signed_in, recordings):
+    """One straddling local midnight must not appear on both days."""
+    add(signed_in)
+    just_before = local_midnight_ms(signed_in, "2026-10-31") - 30_000
+    write_segments(signed_in, "front", 1, just_before)
+
+    body = signed_in.get("/api/cameras/front/days").json()
+    assert [d["date"] for d in body["days"]] == ["2026-10-30"]
+
+
+def test_days_is_empty_before_anything_is_recorded(signed_in, recordings):
+    add(signed_in)
+    body = signed_in.get("/api/cameras/front/days").json()
+    assert body["days"] == []
+    assert body["first"] is None and body["last"] is None
+
+
+def test_days_404s_for_an_unknown_camera(signed_in, recordings):
+    assert signed_in.get("/api/cameras/nope/days").status_code == 404
+
+
+def test_days_needs_a_session(client, recordings):
+    assert client.get("/api/cameras/front/days").status_code == 401
