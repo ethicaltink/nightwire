@@ -28,6 +28,20 @@ please report them.
 LAN only. One shared password, a session cookie, and no cloud, no account
 and no outbound connection of any kind.
 
+## Screenshots
+
+Captured against synthetic test-pattern sources, so every frame below is
+generated rather than recorded from a real camera.
+
+| | |
+| --- | --- |
+| **Feeds** - live grid, one large tile and the rest beside it | **Rewind** - playback, timeline and clip marking |
+| [![Feeds](docs/screenshots/feeds.png)](docs/screenshots/feeds.png) | [![Rewind](docs/screenshots/rewind.png)](docs/screenshots/rewind.png) |
+| **Nodes** - cameras, status and adding one | **Core** - storage, retention projection and health |
+| [![Nodes](docs/screenshots/nodes.png)](docs/screenshots/nodes.png) | [![Core](docs/screenshots/core.png)](docs/screenshots/core.png) |
+| **Vault** - saved clips, which retention never deletes | **Station** - a wall layout, configured by URL |
+| [![Vault](docs/screenshots/vault.png)](docs/screenshots/vault.png) | [![Station](docs/screenshots/station.png)](docs/screenshots/station.png) |
+
 ## Requirements
 
 - A host with Docker and roughly 2 GB of RAM.

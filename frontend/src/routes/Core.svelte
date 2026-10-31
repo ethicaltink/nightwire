@@ -269,8 +269,8 @@
       <p class="hint">
         Prometheus metrics are at <code>/metrics</code>, and the alert rules are in
         <code>deploy/alerts.yml</code> in the repository.
-        <strong>The rules are the part that matters:</strong> metrics with nothing watching them
-        are why three cameras here recorded nothing for days without anyone noticing.
+        <strong>The rules are the part that matters:</strong> metrics with nothing watching
+        them are how an NVR records nothing for days without anyone noticing.
       </p>
     </section>
   {/if}
