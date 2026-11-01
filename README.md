@@ -52,19 +52,34 @@ generated rather than recorded from a real camera.
 
 ## Quick start
 
+Running the published image, with no checkout and nothing to build:
+
 ```bash
-git clone <this repository> nightwire && cd nightwire
-cp .env.example .env
+mkdir nightwire && cd nightwire
+curl -O https://raw.githubusercontent.com/ethicaltink/nightwire/main/compose.pull.yml
+curl -o .env https://raw.githubusercontent.com/ethicaltink/nightwire/main/.env.example
 ```
 
 Set `NVR_PASSWORD` and `NVR_SECRET_KEY` in `.env`; the app refuses to start
-without them.
+without them. Point the `/recordings` volume in `compose.pull.yml` at your
+storage, then:
 
 ```bash
-openssl rand -hex 32          # use for NVR_SECRET_KEY
+docker compose -f compose.pull.yml up -d
+docker ps --filter name=nightwire      # expect (healthy) after ~20s
 ```
 
-Point `/recordings` at your storage in `docker-compose.yml`:
+Open `http://<host>:8080` and sign in.
+
+### Or build from source
+
+```bash
+git clone https://github.com/ethicaltink/nightwire && cd nightwire
+cp .env.example .env
+```
+
+Generate a key with `openssl rand -hex 32`, then point `/recordings` at your
+storage in `docker-compose.yml`:
 
 ```yaml
     volumes:

@@ -1,0 +1,33 @@
+# Run a published image, no build and no source checkout needed.
+#
+#   curl -O https://raw.githubusercontent.com/ethicaltink/nightwire/main/compose.pull.yml
+#   curl -O https://raw.githubusercontent.com/ethicaltink/nightwire/main/.env.example
+#   mv .env.example .env   # then fill in NVR_PASSWORD and NVR_SECRET_KEY
+#   docker compose -f compose.pull.yml up -d
+#
+# `docker-compose.yml` beside this one builds from source instead, which is
+# what you want when developing.
+
+services:
+  nvr:
+    image: tmtinktink/nightwire:v0.1.0
+    container_name: nightwire
+    # Host networking, not a port mapping: ONVIF discovery is multicast and
+    # WebRTC needs a real port on the host. The container listens on
+    # NVR_PORT (8080) plus go2rtc's 1984 and 8554 on localhost only, and
+    # 8555 for WebRTC media.
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # The database, the encrypted camera passwords and go2rtc's config.
+      # Back this up.
+      - ./config:/config
+      # Footage. Point this at real storage, and not at NFS: a network blip
+      # becomes a recording gap, which is the failure this exists to avoid.
+      - /mnt/recordings:/recordings
+    tmpfs:
+      - /tmp/nvr
+    # Long enough for ffmpeg to close the segment it is writing, so a
+    # restart loses nothing rather than truncating the current minute.
+    stop_grace_period: 30s
