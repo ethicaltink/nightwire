@@ -30,17 +30,19 @@ and no outbound connection of any kind.
 
 ## Screenshots
 
-Captured against synthetic test-pattern sources, so every frame below is
-generated rather than recorded from a real camera.
+Captured against synthetic sources: the camera views are generated images
+looped as video, not footage from anyone's cameras.
 
 | | |
 | --- | --- |
-| **Feeds** - live grid, one large tile and the rest beside it | **Rewind** - playback, timeline and clip marking |
+| **Feeds** - live grid, one large tile and the rest beside it | **Rewind** - playback, with a clip selected by dragging the timeline |
 | [![Feeds](docs/screenshots/feeds.png)](docs/screenshots/feeds.png) | [![Rewind](docs/screenshots/rewind.png)](docs/screenshots/rewind.png) |
-| **Nodes** - cameras, status and adding one | **Core** - storage, retention projection and health |
-| [![Nodes](docs/screenshots/nodes.png)](docs/screenshots/nodes.png) | [![Core](docs/screenshots/core.png)](docs/screenshots/core.png) |
-| **Vault** - saved clips, which retention never deletes | **Station** - a wall layout, configured by URL |
-| [![Vault](docs/screenshots/vault.png)](docs/screenshots/vault.png) | [![Station](docs/screenshots/station.png)](docs/screenshots/station.png) |
+| **Choosing a range** - start and end date and time, days with footage only | **Nodes** - cameras, status and adding one |
+| [![Range picker](docs/screenshots/rewind-range.png)](docs/screenshots/rewind-range.png) | [![Nodes](docs/screenshots/nodes.png)](docs/screenshots/nodes.png) |
+| **Core** - storage, retention projection and health | **Vault** - saved clips, which retention never deletes |
+| [![Core](docs/screenshots/core.png)](docs/screenshots/core.png) | [![Vault](docs/screenshots/vault.png)](docs/screenshots/vault.png) |
+| **Station** - a wall layout, configured by URL | |
+| [![Station](docs/screenshots/station.png)](docs/screenshots/station.png) | |
 
 ## Requirements
 
