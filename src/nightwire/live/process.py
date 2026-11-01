@@ -209,7 +209,15 @@ class Go2rtcSupervisor:
     # ------------------------------------------------------------------- public
 
     async def sync(self) -> dict:
-        """Re-register every stream. Called on start and after a camera edit."""
+        """Re-register every stream. Called on start and after a camera edit.
+
+        The config file is rewritten first. go2rtc patches that file when it
+        accepts a stream, so leaving it stale means it patches something that
+        no longer describes the cameras - and an empty one cannot be patched
+        at all. Rewriting costs a few hundred bytes and keeps the file right
+        for the next start.
+        """
+        self.write_config()
         cameras = self._cameras()
         result = await client.sync_streams(cameras, secret=self.secret_key)
         self.streams = result["streams"]

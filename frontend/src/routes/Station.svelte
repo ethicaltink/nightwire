@@ -10,7 +10,7 @@
   import LiveTile from '../lib/LiveTile.svelte';
   import { api } from '../lib/api.js';
   import { motion } from '../lib/live-events.js';
-  import { link } from '../lib/router.js';
+  import { link, navigate } from '../lib/router.js';
   import {
     layoutOf,
     page as pageOf,
@@ -66,7 +66,15 @@
   }
 
   function onKey(event) {
-    if (event.key === 'Escape') single = null;
+    if (event.key !== 'Escape') return;
+    // First Escape closes an expanded tile; a second one leaves the
+    // station. With a full grid there is no clock cell, so without this
+    // there is no way back at all short of editing the URL.
+    if (single !== null) {
+      single = null;
+      return;
+    }
+    navigate('/live');
   }
 
   onMount(() => {
@@ -140,6 +148,11 @@
     </div>
   {/each}
 
+  <!-- Hidden until the pointer moves, so a wall screen shows only cameras. -->
+  <button class="exit" on:click={() => navigate('/live')} title="Leave the station (Esc)">
+    Exit
+  </button>
+
   {#if withStatus && !single}
     <div class="cell status">
       <span class="mono time">{clock}</span>
@@ -176,6 +189,35 @@
 </div>
 
 <style>
+  .exit {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 30;
+    padding: 6px 14px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: rgba(10, 6, 18, 0.72);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  /* Appears on pointer movement or keyboard focus, never on its own: the
+     point of the station is a screen with nothing but cameras on it. */
+  :global(body:hover) .exit,
+  .exit:focus-visible {
+    opacity: 1;
+  }
+
+  .exit:hover {
+    border-color: var(--cyan);
+    color: var(--text-primary);
+  }
+
   .station {
     position: relative;
     min-height: 100vh;

@@ -148,9 +148,16 @@ def to_yaml(document: dict) -> str:
     for key in sorted(document):
         value = document[key]
         if isinstance(value, dict):
+            # A bare `streams:` for an empty mapping, never `streams: {}`.
+            # go2rtc patches this file itself when a stream is registered
+            # through its API, and its patcher cannot handle the flow-style
+            # empty map: it answers every registration with
+            # `400 yaml: did not find expected key`. That is what a config
+            # written before any camera existed looked like, so adding the
+            # first camera to a running container left live video dead until
+            # the next restart rewrote the file.
             lines.append(f"{key}:")
             if not value:
-                lines[-1] = f"{key}: {{}}"
                 continue
             for inner in sorted(value):
                 lines.append(f"  {inner}: {_scalar(value[inner])}")

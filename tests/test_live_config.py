@@ -205,3 +205,24 @@ def test_urls():
     assert config.api_url("api/streams") == "http://127.0.0.1:1984/api/streams"
     assert config.ws_url("front_sub") == "ws://127.0.0.1:1984/api/ws?src=front_sub"
     assert config.frame_url("front_sub").endswith("api/frame.jpeg?src=front_sub")
+
+
+def test_an_empty_stream_list_is_block_style_not_flow():
+    """`streams: {}` is what a config written before any camera looked like.
+
+    go2rtc patches this file itself when it accepts a stream through its
+    API, and its patcher rejects the flow-style empty map with
+    `400 yaml: did not find expected key`. Adding the first camera to a
+    running container therefore left live video dead until the next restart.
+    """
+    text = config.to_yaml(config.build_config([]))
+    assert "streams: {}" not in text
+    assert "\nstreams:\n" in text or text.endswith("streams:\n")
+    parsed = parse_block(text)
+    assert parsed["streams"] == {}
+
+
+def test_an_empty_config_still_carries_the_listeners():
+    parsed = parse_block(config.to_yaml(config.build_config([])))
+    assert parsed["api"]["listen"] == "127.0.0.1:1984"
+    assert parsed["webrtc"]["listen"] == ":8555"

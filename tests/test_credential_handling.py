@@ -190,3 +190,26 @@ def test_a_rejected_credential_says_so(tmp_path):
 
     other = onvif_client._explain("10.0.0.5", 80, Exception("connection refused"))
     assert "refused ONVIF" in other
+
+
+def test_sync_rewrites_the_config_before_registering(tmp_path, monkeypatch):
+    """A stale config is what go2rtc patches, so it is refreshed first."""
+    import asyncio
+
+    conn = fresh(tmp_path)
+    supervisor = live_process.Go2rtcSupervisor(conn, tmp_path / "config", secret_key=SECRET)
+    supervisor.write_config()
+    path = supervisor.config_path
+
+    # Simulate a config written before the camera existed.
+    path.write_text("api:\n  listen: \"127.0.0.1:1984\"\nstreams: {}\n")
+
+    async def fake_sync(cameras, secret=""):
+        return {"streams": ["front_main"], "added": ["front_main"], "removed": []}
+
+    monkeypatch.setattr(live_process.client, "sync_streams", fake_sync)
+    asyncio.run(supervisor.sync())
+
+    rewritten = path.read_text()
+    assert "streams: {}" not in rewritten
+    assert "front_main" in rewritten
