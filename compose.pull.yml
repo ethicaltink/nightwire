@@ -10,7 +10,7 @@
 
 services:
   nvr:
-    image: tmtinktink/nightwire:v0.1.0
+    image: tmtinktink/nightwire:v0.1.3
     container_name: nightwire
     # Host networking, not a port mapping: ONVIF discovery is multicast and
     # WebRTC needs a real port on the host. The container listens on
