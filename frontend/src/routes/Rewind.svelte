@@ -11,6 +11,8 @@
   import EventsPanel from '../lib/EventsPanel.svelte';
   import { clipRange, currentEvent, nextEvent, prevEvent, seekTarget } from '../lib/motion.js';
   import { api, ApiError } from '../lib/api.js';
+  import RangePicker from '../lib/RangePicker.svelte';
+  import { dateOf, dayRange, describeRange, isUsable, rangeAroundFootage } from '../lib/range.js';
   import { fragmentsOf, mediaTimeFor, wallClockFor } from '../lib/playclock.js';
   import { link, location, navigate } from '../lib/router.js';
   import {
@@ -30,7 +32,10 @@
 
   let cameras = [];
   let cameraId = '';
-  let date = localDate(Date.now());
+  // The range the picker chose. Rewind used to be one day at a time; the
+  // calendar now decides start and end, including spanning midnight.
+  let range = dayRange(localDate(Date.now()));
+  let pickerOpen = false;
   let timeline = null;
   // Which days have footage, for the calendar. Loaded per camera and
   // refreshed when the day changes, so a day that starts recording while
@@ -51,8 +56,7 @@
   let playing = false;
   let speed = 1;
   let goToText = '';
-  let clipIn = null;
-  let clipOut = null;
+  let selection = null;
   let refreshTimer;
 
   let events = [];
@@ -65,7 +69,11 @@
   let lastExport = null;
   let exportPoll;
 
-  $: bounds = dayBounds(date);
+  $: bounds = range;
+  // The clip selection lives on the timeline now; these mirror it so the
+  // export call and the keyboard shortcuts keep working unchanged.
+  $: clipIn = selection ? selection.start : null;
+  $: clipOut = selection ? selection.end : null;
 
   async function loadCameras() {
     try {
@@ -93,7 +101,7 @@
   async function loadTimeline() {
     if (!cameraId) return;
     try {
-      timeline = await api.timeline(cameraId, date);
+      timeline = await api.timeline(cameraId, range);
       error = '';
     } catch (err) {
       timeline = null;
@@ -107,7 +115,7 @@
   async function loadEvents() {
     if (!cameraId) return;
     try {
-      const result = await api.events(cameraId, date);
+      const result = await api.events(cameraId, range);
       events = result.events;
       sources = result.sources.filter((source) => source.enabled || hasEvents(result.events, source));
     } catch {
@@ -147,9 +155,23 @@
   }
 
   function clipEvent({ detail }) {
-    const range = clipRange(detail.event, bounds);
-    clipIn = range.in;
-    clipOut = range.out;
+    const around = clipRange(detail.event, bounds);
+    selection = { start: around.in, end: around.out };
+    exportError = '';
+  }
+
+  /** Move one end of the selection to the playhead, creating one if needed. */
+  function setClipEdge(which) {
+    if (playhead === null) return;
+    const other = selection
+      ? which === 'start'
+        ? selection.end
+        : selection.start
+      : playhead;
+    selection = {
+      start: Math.min(playhead, other),
+      end: Math.max(playhead, other),
+    };
     exportError = '';
   }
 
@@ -191,7 +213,7 @@
   /** Attach hls.js to the day's playlist and seek to a moment. */
   async function openPlaylist(seekTo = null) {
     if (!cameraId || !video) return;
-    const url = api.vodUrl(cameraId, date);
+    const url = api.vodUrl(cameraId, range);
 
     const { default: Hls } = await import('hls.js');
     if (hls) {
@@ -310,9 +332,10 @@
       return;
     }
     error = '';
-    const nextDate = localDate(at);
-    if (nextDate !== date) {
-      date = nextDate;
+    // Outside the chosen range, widen to the day the moment falls on rather
+    // than refusing: typing a time is a request to go there.
+    if (at < range.start || at > range.end) {
+      range = dayRange(dateOf(at));
       changeDay(at);
       return;
     }
@@ -377,10 +400,10 @@
         skip(event.shiftKey ? MINUTE : 10 * SECOND);
         break;
       case '[':
-        clipIn = playhead;
+        setClipEdge('start');
         break;
       case ']':
-        clipOut = playhead;
+        setClipEdge('end');
         break;
       case 'n':
       case 'N':
@@ -407,16 +430,22 @@
     const requested = $location.param;
     if (requested && cameras.some((c) => c.id === requested)) cameraId = requested;
     const at = parseMoment(new URLSearchParams(globalThis.location.search).get('t'));
-    if (at !== null) date = localDate(at);
+    if (at !== null) range = dayRange(dateOf(at));
     window = windowAround(at ?? bounds.start, 60 * MINUTE, bounds);
-    await Promise.all([loadTimeline(), loadDays()]);
-    // With no deep link, open on the most recent day that actually has
-    // footage rather than on today, which may be empty on a fresh install
-    // or after an outage.
+    await loadDays();
+    // With no deep link, open on the most recent day that has footage
+    // rather than on today, which may be empty on a fresh install or after
+    // an outage.
     if (at === null && recordedDays.length) {
-      const latest = recordedDays[recordedDays.length - 1].date;
-      if (latest !== date) {
-        date = latest;
+      range = dayRange(recordedDays[recordedDays.length - 1].date);
+    }
+    await loadTimeline();
+    // Then tighten the range to what was actually recorded that day, so the
+    // timeline opens full of footage instead of mostly empty hours.
+    if (at === null && timeline?.ranges?.length) {
+      const tight = rangeAroundFootage(timeline.ranges);
+      if (tight) {
+        range = tight;
         await loadTimeline();
       }
     }
@@ -462,26 +491,30 @@
       </select>
     </label>
     <div class="field datefield">
-      <span>Date</span>
+      <span>Range</span>
       <button
         class="input datebutton"
-        on:click={() => (calendarOpen = !calendarOpen)}
-        title="Pick a day with footage"
+        on:click={() => (pickerOpen = !pickerOpen)}
+        title="Choose the start and end of what the timeline shows"
       >
-        {date}
-        <span class="hint">{recordedDays.length ? `${recordedDays.length} day${recordedDays.length === 1 ? '' : 's'}` : 'no footage'}</span>
+        {describeRange(range)}
+        <span class="hint"
+          >{recordedDays.length
+            ? `${recordedDays.length} day${recordedDays.length === 1 ? '' : 's'} recorded`
+            : 'no footage'}</span
+        >
       </button>
-      {#if calendarOpen}
+      {#if pickerOpen}
         <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-        <div class="scrim" on:click={() => (calendarOpen = false)}></div>
+        <div class="scrim" on:click={() => (pickerOpen = false)}></div>
         <div class="popover">
-          <Calendar
-            selected={date}
+          <RangePicker
+            {range}
             days={recordedDays}
             today={serverToday}
-            on:pick={(event) => {
-              calendarOpen = false;
-              date = event.detail;
+            on:apply={(event) => {
+              pickerOpen = false;
+              range = event.detail;
               changeDay();
             }}
           />
@@ -539,11 +572,12 @@
         </div>
 
         <Timeline
-          dayStart={bounds.start}
-          dayEnd={bounds.end}
+          rangeStart={bounds.start}
+          rangeEnd={bounds.end}
           {timeline}
           {cameraId}
           bind:window
+          bind:selection
           {playhead}
           on:seek={onSeek}
         >
@@ -590,13 +624,12 @@
           </p>
 
           <div class="row">
-            <button class="chip" on:click={() => (clipIn = playhead)}>Set in [</button>
-            <button class="chip" on:click={() => (clipOut = playhead)}>Set out ]</button>
+            <button class="chip" on:click={() => setClipEdge('start')}>Set in [</button>
+            <button class="chip" on:click={() => setClipEdge('end')}>Set out ]</button>
             <button
               class="chip"
               on:click={() => {
-                clipIn = null;
-                clipOut = null;
+                selection = null;
                 exportError = '';
               }}
             >

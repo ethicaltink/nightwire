@@ -31,6 +31,20 @@ async function request(path, options = {}) {
   return body;
 }
 
+/**
+ * The query for a time window.
+ *
+ * Takes either a `YYYY-MM-DD` day or a `{start, end}` in unix ms. The
+ * routes accept both; Rewind moved from days to ranges, and deep links and
+ * other callers still pass a day.
+ */
+function windowQuery(when) {
+  if (when && typeof when === 'object' && Number.isFinite(when.start)) {
+    return `start=${Math.round(when.start)}&end=${Math.round(when.end)}`;
+  }
+  return `date=${encodeURIComponent(when)}`;
+}
+
 const post = (path, body) =>
   request(path, { method: 'POST', body: JSON.stringify(body ?? {}) });
 
@@ -72,8 +86,8 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ sources }),
     }),
-  events: (id, date, sourceIds) => {
-    const params = new URLSearchParams({ date });
+  events: (id, when, sourceIds) => {
+    const params = new URLSearchParams(windowQuery(when));
     if (sourceIds?.length) params.set('sources', sourceIds.join(','));
     return request(`/api/cameras/${id}/events?${params}`);
   },
@@ -82,10 +96,10 @@ export const api = {
   eventSnapshotUrl: (eventId) => `/api/events/${eventId}/snapshot.jpg`,
 
   // playback
-  timeline: (id, date) => request(`/api/cameras/${id}/timeline?date=${encodeURIComponent(date)}`),
+  timeline: (id, when) => request(`/api/cameras/${id}/timeline?${windowQuery(when)}`),
   days: (id) => request(`/api/cameras/${id}/days`),
   segmentAt: (id, at) => request(`/api/cameras/${id}/segment?t=${at}`),
-  vodUrl: (id, date) => `/api/cameras/${id}/vod.m3u8?date=${encodeURIComponent(date)}`,
+  vodUrl: (id, when) => `/api/cameras/${id}/vod.m3u8?${windowQuery(when)}`,
   thumbUrl: (id, at) => `/api/cameras/${id}/thumb?t=${at}`,
 
   // live video
