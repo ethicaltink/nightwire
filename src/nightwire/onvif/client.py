@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import timedelta
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from . import parse
@@ -548,7 +550,30 @@ class PullPoint:
 
     Opened with `connect`, read with `pull`, kept alive with `renew`. The
     listener owns the backoff and the lifecycle; this only speaks ONVIF.
+
+    Three things about this were wrong until they were run against a real
+    camera (an Axis M-series, 2026-11-01), and no test could have caught any
+    of them:
+
+    1. `create_pullpoint_subscription()` does not exist in
+       onvif-zeep-async 4.x, so **no subscription was ever created**.
+    2. The camera returns a vendor `SubscriptionId` in the subscription's
+       WS-Addressing `ReferenceParameters`, and every later request on that
+       subscription must echo it as a SOAP header. Without it `PullMessages`
+       answers `InvalidArgs` and returns nothing, forever. The library's
+       service wrapper does not accept `_soapheaders`, so this binds zeep
+       directly to the subscription address (see `_subscribe`).
+    3. `Renew` and `Unsubscribe` on the subscription-manager binding answer
+       `NotAuthorized` on this camera with the very credentials `PullMessages`
+       accepts, so the subscription cannot be renewed at all. It is instead
+       re-created before it expires - see `_ensure_subscription`.
     """
+
+    PULLPOINT_NS = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription"
+    # Re-subscribe this long before the camera's termination time. Generous,
+    # because one pull can block for most of it.
+    EXPIRY_MARGIN_SECONDS = 90.0
+    MIN_LIFETIME_SECONDS = 60.0
 
     def __init__(self, host: str, port: int, username: str | None, password: str | None) -> None:
         self.host = host
@@ -557,40 +582,150 @@ class PullPoint:
         self.password = password
         self._camera = None
         self._service = None
+        self._proxy = None
+        self._headers: list = []
+        self._expires_at = 0.0
         self.termination_seconds = 600
+        self.subscriptions = 0
 
     async def connect(self, topics: list[str] | None = None) -> None:
+        """Open a PullPoint subscription.
+
+        The subscription is deliberately unfiltered: cameras differ on which
+        topic expression dialects they accept, and a rejected filter loses
+        every event. Filtering happens in `events/` against the sources the
+        operator chose, which is where it can be tested.
+        """
         self._camera = build_camera(self.host, self.port, self.username, self.password)
         await asyncio.wait_for(self._camera.update_xaddrs(), timeout=PROBE_TIMEOUT_SECONDS)
-        # The subscription is filtered to the chosen topics where the camera
-        # supports it; an unfiltered subscription still works, just noisier.
-        await self._camera.create_pullpoint_subscription()
+        await self._subscribe()
+
+    async def _subscribe(self) -> None:
+        """Create the subscription and bind a client that can talk to it."""
+        if self._camera is None:
+            raise OnvifError("subscribe before connect")
+        events = await self._camera.create_events_service()
+        response = await asyncio.wait_for(
+            events.CreatePullPointSubscription(
+                {"InitialTerminationTime": f"PT{int(self.termination_seconds)}S"}
+            ),
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+        reference = getattr(response, "SubscriptionReference", None)
+        if reference is None:
+            raise OnvifError("camera accepted the subscription but returned no reference")
+
+        address = getattr(reference, "Address", None)
+        address = getattr(address, "_value_1", None) or str(address or "")
+        if not address:
+            raise OnvifError("camera returned a subscription with no address")
+
+        # The vendor reference parameters, echoed as SOAP headers on every
+        # later call. Axis puts its `SubscriptionId` here; a camera that
+        # needs none leaves this empty and the calls work unchanged.
+        parameters = getattr(reference, "ReferenceParameters", None)
+        raw = getattr(parameters, "_value_1", None) if parameters is not None else None
+        self._headers = [element for element in (raw or []) if _is_element(element)]
+
+        # The pullpoint endpoint only exists once a subscription does, so it
+        # is not in the device's service list. Point the camera object at the
+        # address the subscription came back with before binding.
+        self._camera.xaddrs[self.PULLPOINT_NS] = address
         self._service = await self._camera.create_pullpoint_service()
+        self._proxy = self._service.zeep_client.create_service(
+            self._service.binding_name, address
+        )
+        self._expires_at = time.monotonic() + self._lifetime(response)
+        self.subscriptions += 1
+
+        # Ask for the current state of every property topic right away, so a
+        # camera already in motion when we subscribe is not missed until it
+        # next changes.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(
+                self._proxy.SetSynchronizationPoint(_soapheaders=self._headers),
+                timeout=PROBE_TIMEOUT_SECONDS,
+            )
+
+    def _lifetime(self, response) -> float:
+        """How long this subscription lasts, by the camera's own clock.
+
+        Both timestamps come from the camera, so their difference is right
+        even when its clock is far off ours - which is normal, and the reason
+        `build_camera` has to correct for it at all.
+        """
+        termination = getattr(response, "TerminationTime", None)
+        current = getattr(response, "CurrentTime", None)
+        granted = float(self.termination_seconds)
+        try:
+            if termination is not None and current is not None:
+                granted = (termination - current).total_seconds()
+        except TypeError:
+            granted = float(self.termination_seconds)
+        return max(self.MIN_LIFETIME_SECONDS, granted)
+
+    async def _ensure_subscription(self) -> None:
+        """Re-create the subscription before the camera drops it.
+
+        `Renew` is refused by at least one camera that accepts everything
+        else, so this does not renew: it subscribes again and throws the old
+        subscription away. The old one expires on the camera by itself a
+        couple of minutes later, so at most two exist at once. An event
+        arriving in the moment between the two is lost; the alternative is
+        losing every event after ten minutes.
+        """
+        remaining = self._expires_at - time.monotonic()
+        if self._proxy is not None and remaining > self.EXPIRY_MARGIN_SECONDS:
+            return
+        log.info("camera %s: renewing pullpoint subscription", self.host)
+        await self._subscribe()
 
     async def pull(self, timeout_seconds: int = 10, limit: int = 50) -> list[dict]:
-        if self._service is None:
+        if self._proxy is None:
             raise OnvifError("pull before connect")
-        request = self._service.create_type("PullMessages")
-        request.Timeout = f"PT{int(timeout_seconds)}S"
-        request.MessageLimit = int(limit)
-        response = await asyncio.wait_for(
-            self._service.PullMessages(request), timeout=timeout_seconds + 10
-        )
+        await self._ensure_subscription()
+        try:
+            response = await self._pull_once(timeout_seconds, limit)
+        except (asyncio.CancelledError, asyncio.TimeoutError, OnvifError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # A SOAP fault here is nearly always the subscription being gone
+            # (an expired one answers `InvalidArgVal`). Re-subscribe once and
+            # retry; anything that is really broken fails again and the
+            # listener's backoff takes over.
+            log.info("camera %s: pullpoint failed (%s), resubscribing", self.host, exc)
+            await self._subscribe()
+            response = await self._pull_once(timeout_seconds, limit)
+
         document = _as_dict(response)
         messages = document.get("NotificationMessage") or []
         if isinstance(messages, dict):
             messages = [messages]
         return [m if isinstance(m, dict) else {} for m in messages]
 
+    async def _pull_once(self, timeout_seconds: int, limit: int):
+        # Keyword arguments and a real timedelta, not a dict and not a `PT10S`
+        # string: this proxy is zeep's own, and the camera answers the string
+        # form with `InvalidArgs` and returns nothing at all.
+        return await asyncio.wait_for(
+            self._proxy.PullMessages(
+                Timeout=timedelta(seconds=int(timeout_seconds)),
+                MessageLimit=int(limit),
+                _soapheaders=self._headers,
+            ),
+            timeout=timeout_seconds + 10,
+        )
+
     async def renew(self) -> None:
-        if self._service is None:
+        """Called by the listener on a timer. Re-subscribes if due."""
+        if self._proxy is None:
             return
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(
-                self._service.SetSynchronizationPoint(), timeout=PROBE_TIMEOUT_SECONDS
-            )
+            await self._ensure_subscription()
 
     async def close(self) -> None:
+        # No `Unsubscribe`: the camera that needs the reference parameters
+        # refuses it outright, and the subscription expires on its own.
         if self._camera is not None:
             try:
                 await self._camera.close()
@@ -598,4 +733,6 @@ class PullPoint:
                 pass
         self._camera = None
         self._service = None
-
+        self._proxy = None
+        self._headers = []
+        self._expires_at = 0.0

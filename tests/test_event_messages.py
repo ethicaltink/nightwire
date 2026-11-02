@@ -1,5 +1,7 @@
 """Parsing PullMessages notifications, with the fake responder's fixtures."""
 
+from datetime import datetime, timezone
+
 from nightwire.events import messages
 from tests import fake_pullpoint as fake
 
@@ -8,7 +10,7 @@ T0 = 1_793_000_000_000
 
 def test_a_motion_notification_parses():
     parsed = messages.parse(fake.motion(T0, True))
-    assert parsed.topic == fake.VMD_TOPIC
+    assert parsed.topic == fake.VMD_PATH
     assert parsed.value is True
     assert parsed.is_stateful
     assert parsed.source_items["ProfileID"] == "1"
@@ -124,3 +126,64 @@ def test_an_unconfigured_topic_does_not_match():
     parsed = messages.parse(fake.crossing(T0))
     index = index_for(fake.VMD_TOPIC, None)
     assert messages.match(parsed, index) is None
+
+
+def test_the_axis_any_wrapped_shape_parses():
+    """The shape a real Axis camera sends, recorded 2026-11-01.
+
+    `Message` is `xsd:any`, so zeep puts the real element under `_value_1`
+    with a `datetime` for `UtcTime` and `_attr_1` siblings. Before this was
+    handled, every live notification parsed with an empty source and an empty
+    data set, so no motion event could ever be recorded.
+    """
+    raw = {
+        "Topic": {
+            "Dialect": "http://docs.oasis-open.org/wsn/t-1/TopicExpression/Simple",
+            "_attr_1": {},
+            "_value_1": "tnsaxis:CameraApplicationPlatform/VMD/Camera1Profile1",
+        },
+        "Message": {
+            "_value_1": {
+                "Data": {
+                    "ElementItem": [],
+                    "Extension": None,
+                    "SimpleItem": [{"Name": "active", "Value": "1"}],
+                    "_attr_1": None,
+                },
+                "Extension": None,
+                "Key": None,
+                "PropertyOperation": "Changed",
+                "Source": {
+                    "ElementItem": [],
+                    "Extension": None,
+                    "SimpleItem": [{"Name": "VideoSource", "Value": "0"}],
+                    "_attr_1": None,
+                },
+                "UtcTime": datetime.fromtimestamp(T0 / 1000, timezone.utc),
+                "_attr_1": {},
+            }
+        },
+        "ProducerReference": {"Address": {"_value_1": "uri://x/ProducerReference"}},
+        "SubscriptionReference": None,
+    }
+    parsed = messages.parse(raw)
+    assert parsed.topic == "CameraApplicationPlatform/VMD/Camera1Profile1"
+    assert parsed.source_items == {"VideoSource": "0"}
+    assert parsed.data_items == {"active": "1"}
+    assert parsed.value is True
+    assert parsed.camera_ts_ms == T0
+
+
+def test_a_prefixed_notification_matches_a_prefix_free_source():
+    """The production case, which every other test here used to miss.
+
+    Discovery stores `RuleEngine/VMD3/vmd3_video_1` (XML local names, from
+    `GetEventProperties`); the camera's notifications say
+    `tns1:RuleEngine/tnsaxis:VMD3/vmd3_video_1`. Matched as plain strings
+    these never met, so on a real camera no notification belonged to any
+    configured source and no event was ever recorded.
+    """
+    parsed = messages.parse(fake.motion(T0, True))
+    assert messages.match(parsed, index_for(fake.VMD_PATH, None))["id"] == 1
+    # And the other way round, for a source saved before the paths agreed.
+    assert messages.match(parsed, index_for(fake.VMD_TOPIC, None))["id"] == 1

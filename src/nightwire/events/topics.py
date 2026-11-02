@@ -167,9 +167,27 @@ def flatten(topic_set, prefix: str = "", depth: int = 0) -> list[Topic]:
     return sorted(found, key=lambda topic: topic.path)
 
 
+def normalise_path(path: str) -> str:
+    """`tns1:RuleEngine/tnsaxis:VMD3/vmd3_video_1` -> `RuleEngine/VMD3/vmd3_video_1`.
+
+    Discovery and notification disagree about namespace prefixes: the
+    `GetEventProperties` TopicSet is XML, so `flatten` sees element local
+    names and stores a prefix-free path, while a PullMessages `Topic` is a
+    concatenated expression that keeps every prefix. Matching the two as
+    plain strings therefore never matched on a real camera, and **every
+    notification was dropped as belonging to no configured source** - with
+    the listener reporting itself happily subscribed. The whole test suite
+    passed because its fixtures used the prefixed form on both sides.
+
+    Both sides go through here now, so either form matches either.
+    """
+    segments = [segment for segment in str(path).strip().lstrip("/").split("/") if segment]
+    return "/".join(strip_prefix(segment) for segment in segments)
+
+
 def source_key(topic: str, source_filter: str | None) -> str:
     """The identity of one event source, for matching incoming messages."""
-    return f"{topic}#{source_filter or ''}"
+    return f"{normalise_path(topic)}#{source_filter or ''}"
 
 
 def message_source_filter(source_items: dict | None, names: tuple[str, ...] | None = None) -> str:

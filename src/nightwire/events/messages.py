@@ -92,7 +92,9 @@ def normalise_topic(raw) -> str:
             text = _text(value)
             if text:
                 break
-    return text.strip().lstrip("/")
+    # Prefix-free, because that is the form discovery stores. See
+    # `topics.normalise_path`.
+    return topics_mod.normalise_path(text)
 
 
 def looks_like_state(field_name: str) -> bool:
@@ -151,6 +153,39 @@ def _utc_time(message: dict):
     return None
 
 
+BODY_KEYS = ("Source", "Data", "UtcTime", "PropertyOperation")
+WRAPPER_KEYS = ("_value_1", "Message")
+MAX_WRAPPERS = 4
+
+
+def _unwrap_message(message) -> dict:
+    """The message body, through whatever wrappers the firmware puts on it.
+
+    `Message` is `xsd:any` in the WS-Notification schema, so zeep hands back
+    the real element one level down under `_value_1` - which is the shape an
+    Axis camera actually sends, and which this missed until it was run
+    against one (2026-11-01): every notification parsed with an empty source
+    and an empty data set, so nothing had a state and no motion event could
+    ever be recorded. Other firmware doubles the element name instead
+    (`Message/Message`), so both are followed, shallowly and by name.
+    """
+    for _ in range(MAX_WRAPPERS):
+        if not isinstance(message, dict):
+            return {}
+        # A body is anything that carries a field of its own. `UtcTime` is an
+        # XML attribute, so it may be inside `_attr_1` rather than a key.
+        if any(key in message for key in BODY_KEYS) or _utc_time(message) is not None:
+            return message
+        for key in WRAPPER_KEYS:
+            inner = message.get(key)
+            if isinstance(inner, dict):
+                message = inner
+                break
+        else:
+            return {}
+    return message if isinstance(message, dict) else {}
+
+
 def parse(notification: dict) -> Notification | None:
     """One notification, or None if it is not usable."""
     if not isinstance(notification, dict):
@@ -159,12 +194,7 @@ def parse(notification: dict) -> Notification | None:
     if not topic:
         return None
 
-    message = notification.get("Message") or {}
-    if isinstance(message, dict) and "Message" in message:
-        # The doubly-wrapped form: NotificationMessage/Message/Message.
-        message = message.get("Message") or {}
-    if not isinstance(message, dict):
-        message = {}
+    message = _unwrap_message(notification.get("Message"))
 
     source_items = _simple_items(message.get("Source"))
     data_items = _simple_items(message.get("Data"))

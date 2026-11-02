@@ -20,6 +20,12 @@ VMD_TOPIC = "tns1:RuleEngine/tnsaxis:VMD3/vmd3_video_1"
 FENCE_TOPIC = "tns1:RuleEngine/tnsaxis:FenceGuard/Crossed"
 TAMPER_TOPIC = "tns1:VideoSource/tnsaxis:Tampering"
 
+# The same topics as a parsed notification reports them: namespace prefixes
+# removed, which is the form discovery stores and matching uses.
+VMD_PATH = "RuleEngine/VMD3/vmd3_video_1"
+FENCE_PATH = "RuleEngine/FenceGuard/Crossed"
+TAMPER_PATH = "VideoSource/Tampering"
+
 
 def iso(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")

@@ -108,6 +108,7 @@ class EventSupervisor:
         self.snapshots = snapshots
         self.listeners: dict[str, CameraListener] = {}
         self._tasks: list[asyncio.Task] = []
+        self._camera_tasks: dict[str, asyncio.Task] = {}
         self._stopping = asyncio.Event()
         self.started = False
 
@@ -117,20 +118,65 @@ class EventSupervisor:
         return list(self.conn.execute("SELECT * FROM cameras ORDER BY sort_order, id"))
 
     async def start(self) -> None:
-        now_ms = int(time.time() * 1000)
         for row in self._cameras():
-            # A crash can leave events open with no end; close them before
-            # anything new opens, or a block grows across the timeline forever.
-            store.close_dangling(self.conn, row["id"], now_ms)
-            listener = CameraListener(row["id"], row["name"])
-            self.listeners[row["id"]] = listener
-            self._tasks.append(
-                asyncio.create_task(self._camera_loop(listener), name=f"nvr-evt-{row['id']}")
-            )
+            self._spawn(row)
         self._tasks.append(asyncio.create_task(self._cap_loop(), name="nvr-evt-cap"))
         self._tasks.append(asyncio.create_task(self._clock_loop(), name="nvr-evt-clock"))
         self.started = True
         log.info("event supervisor started with %d camera(s)", len(self.listeners))
+
+    def _spawn(self, row: sqlite3.Row) -> None:
+        """Give one camera a listener and its own task."""
+        camera_id = row["id"]
+        # A crash can leave events open with no end; close them before
+        # anything new opens, or a block grows across the timeline forever.
+        store.close_dangling(self.conn, camera_id, int(time.time() * 1000))
+        listener = CameraListener(camera_id, row["name"])
+        self.listeners[camera_id] = listener
+        self._camera_tasks[camera_id] = asyncio.create_task(
+            self._camera_loop(listener), name=f"nvr-evt-{camera_id}"
+        )
+
+    async def _retire(self, camera_id: str) -> None:
+        """Stop one camera's listener and close whatever it had open."""
+        task = self._camera_tasks.pop(camera_id, None)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        listener = self.listeners.pop(camera_id, None)
+        if listener is not None:
+            with contextlib.suppress(Exception):
+                self._apply(listener, listener.tracker.on_reconnect(int(time.time() * 1000)))
+
+    async def reconcile(self) -> dict:
+        """Match the running listeners to the camera table.
+
+        Called after any camera is added, edited or deleted. Without it a
+        camera added through the UI had **no event listener until the
+        container was restarted** - `start` was the only thing that ever
+        created one, and `resubscribe` returned silently when there was none,
+        so picking motion sources on Nodes appeared to work and then produced
+        nothing. The recorder had the same bug and the same fix.
+        """
+        if not self.started or self._stopping.is_set():
+            return {"added": [], "removed": []}
+        rows = {row["id"]: row for row in self._cameras()}
+        added = [camera_id for camera_id in rows if camera_id not in self.listeners]
+        removed = [camera_id for camera_id in list(self.listeners) if camera_id not in rows]
+
+        for camera_id in removed:
+            await self._retire(camera_id)
+        for camera_id in added:
+            self._spawn(rows[camera_id])
+        for camera_id, row in rows.items():
+            listener = self.listeners.get(camera_id)
+            if listener is not None:
+                listener.name = row["name"]
+
+        if added or removed:
+            log.info("event listeners reconciled: added=%s removed=%s", added, removed)
+        return {"added": added, "removed": removed}
 
     # ------------------------------------------------------------------- loops
 
@@ -346,6 +392,10 @@ class EventSupervisor:
         """Drop a camera's subscription so its loop picks up new sources."""
         listener = self.listeners.get(camera_id)
         if listener is None:
+            # The camera may have been added since the supervisor started.
+            await self.reconcile()
+            listener = self.listeners.get(camera_id)
+        if listener is None:
             return
         listener.backoff.reset()
         listener.note("sources changed: resubscribing")
@@ -360,10 +410,12 @@ class EventSupervisor:
         now_ms = int(time.time() * 1000)
         for listener in self.listeners.values():
             self._apply(listener, listener.tracker.on_reconnect(now_ms))
-        for task in self._tasks:
+        tasks = [*self._tasks, *self._camera_tasks.values()]
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+        self._camera_tasks.clear()
         for listener in self.listeners.values():
             listener.state = STATE_STOPPED
             listener.detail = "supervisor stopped"

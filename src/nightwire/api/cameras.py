@@ -216,6 +216,10 @@ async def _resync_live(request: Request) -> None:
     spawned at startup, so **a camera added through the UI recorded nothing
     until the container was restarted**, switching recording off left ffmpeg
     running, and deleting a camera left its recorder pulling the stream.
+
+    The event-listener half was missing in the same way until 2026-11-01: a
+    camera added through the UI got no PullPoint subscription until a
+    restart, so ticking its motion sources on Nodes did nothing at all.
     """
     supervisor = getattr(request.app.state, "go2rtc", None)
     if supervisor is not None:
@@ -230,6 +234,13 @@ async def _resync_live(request: Request) -> None:
             await recorder.reconcile()
         except Exception as exc:  # noqa: BLE001 - deliberately total
             log.warning("recorder reconcile failed after a camera change: %s", exc)
+
+    events = getattr(request.app.state, "events", None)
+    if events is not None:
+        try:
+            await events.reconcile()
+        except Exception as exc:  # noqa: BLE001 - deliberately total
+            log.warning("event listener reconcile failed after a camera change: %s", exc)
 
 
 @router.get("/cameras/{camera_id}")
