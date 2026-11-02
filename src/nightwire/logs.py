@@ -43,7 +43,9 @@ class RedactFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str) and "://" in record.msg:
+        # Both forms of the marker: a URL carried inside another URL's query
+        # string is percent-encoded and has no literal `://`.
+        if isinstance(record.msg, str) and ("://" in record.msg or "%3A%2F%2F" in record.msg.upper()):
             record.msg = rtsp.redact(record.msg)
         if record.args:
             if isinstance(record.args, dict):

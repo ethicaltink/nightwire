@@ -14,7 +14,7 @@ import stat
 
 import pytest
 
-from nightwire import cameras, db
+from nightwire import cameras, db, rtsp
 from nightwire.live import process as live_process
 from nightwire.recording import supervisor as supervisor_mod
 
@@ -213,3 +213,32 @@ def test_sync_rewrites_the_config_before_registering(tmp_path, monkeypatch):
     rewritten = path.read_text()
     assert "streams: {}" not in rewritten
     assert "front_main" in rewritten
+
+
+def test_redact_scrubs_percent_encoded_credentials():
+    """The form go2rtc's API takes, which httpx logs in full.
+
+    `PUT /api/streams?name=...&src=rtsp%3A%2F%2Fuser%3Apass%40host` has no
+    literal `://` or `@`, so the plain pattern never matched it and the
+    camera password was printed in the container log on every stream
+    registration. Found reading a live container's log, 2026-11-02.
+    """
+    line = (
+        'HTTP Request: PUT http://127.0.0.1:1984/api/streams?name=front_main'
+        "&src=rtsp%3A%2F%2Fadmin%3Ahunter2%4010.0.0.9%2Fstream%23backchannel%3D0 "
+        '"HTTP/1.1 200 OK"'
+    )
+    scrubbed = rtsp.redact(line)
+    assert "hunter2" not in scrubbed
+    assert "admin" not in scrubbed
+    assert "%3A%2F%2F***%3A***%40" in scrubbed
+    # The rest of the line survives: this is a log a human has to read.
+    assert "front_main" in scrubbed
+    assert "10.0.0.9" in scrubbed
+
+
+def test_redact_handles_both_forms_in_one_line():
+    both = "rtsp://u:p@host/a and rtsp%3A%2F%2Fu%3Ap%40host%2Fb"
+    scrubbed = rtsp.redact(both)
+    assert "u:p@" not in scrubbed
+    assert "u%3Ap%40" not in scrubbed

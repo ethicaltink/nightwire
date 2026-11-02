@@ -29,7 +29,20 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 # Used for redaction, so it is deliberately broad about the scheme.
 _USERINFO = re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)(?P<userinfo>[^/@\s]+)@")
 
+# The same thing percent-encoded, which is how an RTSP URL looks when it is
+# carried inside another URL's query string. go2rtc's API takes the source
+# that way (`PUT /api/streams?name=...&src=rtsp%3A%2F%2Fuser%3Apass%40host`),
+# and httpx logs the whole request line at INFO, so **the camera password
+# was printed in the container log** on every stream registration. The
+# pattern above cannot see it: there is no literal `://` or `@` to match.
+# Found 2026-11-02, reading the log of a live container.
+_ENCODED_USERINFO = re.compile(
+    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*%3A%2F%2F)(?P<userinfo>[^\s/@]+?)%40",
+    re.IGNORECASE,
+)
+
 REDACTED = "***:***"
+REDACTED_ENCODED = "***%3A***"
 
 
 def split_userinfo(uri: str) -> tuple[str | None, str | None]:
@@ -109,11 +122,15 @@ def redact(text: str) -> str:
 
     Applied to ffmpeg's stderr before it enters the per-camera ring buffer
     shown on Nodes, and installed as a logging filter, because a failed RTSP
-    connection prints the whole URL.
+    connection prints the whole URL. Both the plain and the percent-encoded
+    form are scrubbed - see `_ENCODED_USERINFO`.
     """
     if not text:
         return text
-    return _USERINFO.sub(lambda m: f"{m.group('scheme')}{REDACTED}@", str(text))
+    scrubbed = _USERINFO.sub(lambda m: f"{m.group('scheme')}{REDACTED}@", str(text))
+    return _ENCODED_USERINFO.sub(
+        lambda m: f"{m.group('scheme')}{REDACTED_ENCODED}%40", scrubbed
+    )
 
 
 def redact_argv(argv) -> list[str]:

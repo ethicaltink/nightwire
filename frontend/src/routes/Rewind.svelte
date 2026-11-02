@@ -1,16 +1,24 @@
 <!-- Rewind: the player, the controls and the timeline.
 
+     **Opens on live.** Rewind used to attach the day's VOD playlist on
+     mount, so the page opened mid-afternoon on footage nobody had asked
+     for. It now shows the camera's live stream until something says where
+     to go: a range from the calendar, a click on the timeline, or a motion
+     event. Any of those switches the player to recorded playback, seeks to
+     that moment and plays from it; "Back to live" returns.
+
      Motion events fill the `lanes` slot on the timeline and the Events
-     panel on the right; the Clip panel cuts an export. Both are laid out here
-     already so neither needs the page restructured. -->
+     panel on the right; the Clip panel cuts an export. -->
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import Timeline from '../lib/Timeline.svelte';
+  import LiveTile from '../lib/LiveTile.svelte';
   import Calendar from '../lib/Calendar.svelte';
   import EventLanes from '../lib/EventLanes.svelte';
   import EventsPanel from '../lib/EventsPanel.svelte';
   import { clipRange, currentEvent, nextEvent, prevEvent, seekTarget } from '../lib/motion.js';
   import { api, ApiError } from '../lib/api.js';
+  import { motion as liveMotion } from '../lib/live-events.js';
   import RangePicker from '../lib/RangePicker.svelte';
   import { dateOf, dayRange, describeRange, isUsable, rangeAroundFootage } from '../lib/range.js';
   import { fragmentsOf, mediaTimeFor, wallClockFor } from '../lib/playclock.js';
@@ -32,6 +40,17 @@
 
   let cameras = [];
   let cameraId = '';
+  // 'live' until something asks for a moment. See the comment at the top.
+  let mode = 'live';
+  // go2rtc stream names by camera, for the live player.
+  let liveStreams = new Map();
+  // Whether hls.js is attached to the current range's playlist. Reset
+  // whenever the range changes, because the VOD URL carries the range.
+  let playlistOpened = false;
+  // Play as soon as the seek lands. A seek asked for before the playlist
+  // has loaded is applied on LEVEL_LOADED, and starting playback before
+  // then would play the first recorded frame of the range instead.
+  let playOnSeek = false;
   // The range the picker chose. Rewind used to be one day at a time; the
   // calendar now decides start and end, including spanning midnight.
   let range = dayRange(localDate(Date.now()));
@@ -70,6 +89,8 @@
   let exportPoll;
 
   $: bounds = range;
+  $: liveStream = liveStreams.get(cameraId) ?? '';
+  $: cameraName = cameras.find((camera) => camera.id === cameraId)?.name ?? cameraId;
   // The clip selection lives on the timeline now; these mirror it so the
   // export call and the keyboard shortcuts keep working unchanged.
   $: clipIn = selection ? selection.start : null;
@@ -82,6 +103,20 @@
       if (!cameraId && cameras.length) cameraId = cameras[0].id;
     } catch (err) {
       error = err instanceof ApiError ? err.message : String(err);
+    }
+  }
+
+  /** The go2rtc stream name per camera, for the live player. Never fatal:
+      without it Rewind says live video is unavailable and the timeline,
+      the calendar and the events all still work. */
+  async function loadLiveStreams() {
+    try {
+      const result = await api.liveStreams();
+      liveStreams = new Map(
+        (result.cameras ?? []).map((camera) => [camera.camera_id, camera.main_stream]),
+      );
+    } catch {
+      liveStreams = new Map();
     }
   }
 
@@ -138,17 +173,64 @@
     hidden = next;
   }
 
-  /** Clicking an event plays from 5 s before it starts. */
-  function pickEvent({ detail }) {
-    const at = seekTarget(detail.event);
+  /** Leave live and play recorded footage from `atMs`.
+   *
+   *  Everything that names a moment goes through here - the calendar, a
+   *  timeline click, a motion event, the Go box - so there is one place
+   *  that knows the player has to exist before it can be attached. The
+   *  `tick` matters: in live mode the <video> is not in the DOM at all, so
+   *  `openPlaylist` would return early without it.
+   */
+  async function goRecorded(atMs, { play = true } = {}) {
+    const at = Math.min(Math.max(atMs, bounds.start), bounds.end);
+    mode = 'recorded';
     playhead = at;
-    window = windowAround(at, window.end - window.start, bounds);
-    seekToMoment(at);
-    if (video?.paused) video.play();
+    window = windowAround(at, window.end - window.start || 60 * MINUTE, bounds);
+    playOnSeek = play;
+    await tick();
+    if (playlistOpened && hls) {
+      seekToMoment(at);
+    } else {
+      await openPlaylist(at);
+      playlistOpened = true;
+    }
+  }
+
+  /** Back to the live stream, and drop the playlist so nothing decodes twice. */
+  function goLive() {
+    mode = 'live';
+    playOnSeek = false;
+    playing = false;
+    closePlaylist();
+  }
+
+  function closePlaylist() {
+    if (hls) {
+      hls.destroy();
+      hls = null;
+    }
+    playlistOpened = false;
+    pendingSeek = null;
+  }
+
+  /** Clicking an event plays from 5 s before it starts.
+   *
+   *  An event outside the chosen range widens the range to its day first:
+   *  picking a motion event is a request to see it, not a request to be
+   *  told it is out of range.
+   */
+  async function pickEvent({ detail }) {
+    const at = seekTarget(detail.event);
+    if (at < range.start || at > range.end) {
+      range = dayRange(dateOf(at));
+      closePlaylist();
+      await Promise.all([loadTimeline(), loadDays()]);
+    }
+    await goRecorded(at);
   }
 
   function stepEvent(direction) {
-    const from = playhead ?? bounds.start;
+    const from = playhead ?? (mode === 'live' ? Date.now() : bounds.start);
     const found =
       direction > 0 ? nextEvent(events, from, hidden) : prevEvent(events, from, hidden);
     if (found) pickEvent({ detail: { event: found } });
@@ -269,6 +351,10 @@
     const fragments = fragmentsOf(hls);
     if (fragments.length) {
       video.currentTime = mediaTimeFor(fragments, atMs);
+      if (playOnSeek) {
+        playOnSeek = false;
+        video.play()?.catch(() => {});
+      }
       return;
     }
     // The playlist has not loaded yet. Remember where we were asked for and
@@ -320,9 +406,7 @@
   }
 
   function onSeek(event) {
-    const at = event.detail.at;
-    playhead = at;
-    seekToMoment(at);
+    goRecorded(event.detail.at);
   }
 
   function goToTime() {
@@ -339,12 +423,7 @@
       changeDay(at);
       return;
     }
-    window = windowAround(at, window.end - window.start, bounds);
-    onSeek({ detail: { at } });
-  }
-
-  function jumpToLive() {
-    navigate(`/live`);
+    goRecorded(at);
   }
 
   function snapshot() {
@@ -377,11 +456,31 @@
     navigate(`/playback/${otherId}?t=${formatMoment(at)}`);
   }
 
+  /** Reload everything for the current camera and range.
+   *
+   *  Called when the camera changes. In live mode it refreshes the
+   *  timeline, the calendar and the events and leaves the player alone;
+   *  in recorded mode it reattaches the playlist at the same moment.
+   */
   async function changeDay(seekTo = null) {
+    closePlaylist();
     await Promise.all([loadTimeline(), loadDays()]);
     const target = seekTo ?? bounds.start;
     window = windowAround(target, window.end - window.start || 60 * MINUTE, bounds);
-    await openPlaylist(target);
+    if (mode === 'recorded') await goRecorded(target, { play: false });
+  }
+
+  /** A range from the calendar: load it and play its first footage.
+   *
+   *  The first recorded moment inside the range rather than its start,
+   *  because a range beginning at midnight would otherwise open on a gap.
+   */
+  async function enterRange(next) {
+    range = next;
+    closePlaylist();
+    await Promise.all([loadTimeline(), loadDays()]);
+    const first = timeline?.ranges?.length ? timeline.ranges[0].start_ts : bounds.start;
+    await goRecorded(first);
   }
 
   function onKey(event) {
@@ -426,6 +525,7 @@
 
   onMount(async () => {
     await loadCameras();
+    await loadLiveStreams();
     // Deep link: /playback/front?t=2026-10-27T14:32:05
     const requested = $location.param;
     if (requested && cameras.some((c) => c.id === requested)) cameraId = requested;
@@ -454,8 +554,9 @@
     // the newest footage instead, which is what anyone opening Rewind is
     // looking for.
     if (at === null) window = windowAround(newestMoment(), 60 * MINUTE, bounds);
-    await openPlaylist(at);
-    if (at !== null) playhead = at;
+    // A deep link names a moment, so it goes straight to recorded playback.
+    // Without one the player stays live until something asks for a moment.
+    if (at !== null) await goRecorded(at, { play: false });
 
     refreshTimer = setInterval(loadTimeline, TIMELINE_REFRESH_MS);
     globalThis.addEventListener('keydown', onKey);
@@ -514,15 +615,14 @@
             today={serverToday}
             on:apply={(event) => {
               pickerOpen = false;
-              range = event.detail;
-              changeDay();
+              enterRange(event.detail);
             }}
           />
         </div>
       {/if}
     </div>
-    <span class="hint playhead mono">
-      {playhead === null ? '--:--:--' : formatClock(playhead)}
+    <span class="hint playhead mono" class:live={mode === 'live'}>
+      {mode === 'live' ? 'LIVE' : playhead === null ? '--:--:--' : formatClock(playhead)}
     </span>
   </header>
 
@@ -536,17 +636,41 @@
     <div class="main">
       <div class="left">
         <div class="player">
-          <!-- svelte-ignore a11y-media-has-caption -->
-          <video
-            bind:this={video}
-            on:timeupdate={onTimeUpdate}
-            on:play={() => (playing = true)}
-            on:pause={() => (playing = false)}
-            playsinline
-          ></video>
+          {#if mode === 'live'}
+            {#if liveStream}
+              <LiveTile
+                name={cameraName}
+                stream={liveStream}
+                motion={$liveMotion.has(cameraId)}
+                motionZone={$liveMotion.get(cameraId)?.label ?? ''}
+                showClock={true}
+              />
+            {:else}
+              <p class="hint unavailable">Live video is not available for this camera.</p>
+            {/if}
+          {:else}
+            <!-- svelte-ignore a11y-media-has-caption -->
+            <video
+              bind:this={video}
+              on:timeupdate={onTimeUpdate}
+              on:play={() => (playing = true)}
+              on:pause={() => (playing = false)}
+              playsinline
+            ></video>
+          {/if}
         </div>
 
         <div class="controls">
+          {#if mode === 'live'}
+            <span class="chip on" aria-current="true">Live</span>
+            <span class="hint livehint">
+              Pick a motion event, click the timeline, or choose a range to rewind.
+            </span>
+            <button class="chip" on:click={() => goRecorded(newestMoment())}>
+              Play newest footage
+            </button>
+          {:else}
+          <button class="chip" on:click={goLive}>Back to live</button>
           <button class="button" on:click={togglePlay}>{playing ? 'Pause' : 'Play'}</button>
           <button class="chip" on:click={() => skip(-MINUTE)} title="Back 1 minute">-1m</button>
           <button class="chip" on:click={() => skip(-10 * SECOND)} title="Back 10 seconds">-10s</button>
@@ -566,9 +690,9 @@
             <button class="chip" type="submit">Go</button>
           </form>
 
-          <button class="chip" on:click={jumpToLive}>Jump to live</button>
           <button class="chip" on:click={snapshot}>Snapshot</button>
           <button class="chip" on:click={downloadSegment}>Download segment</button>
+          {/if}
         </div>
 
         <Timeline
@@ -770,6 +894,22 @@
     flex-direction: column;
     gap: 12px;
     min-width: 0;
+  }
+
+  .playhead.live {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .unavailable {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    margin: 0;
+  }
+
+  .livehint {
+    flex: 1 1 auto;
   }
 
   .player {
