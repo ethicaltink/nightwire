@@ -597,8 +597,18 @@ class PullPoint:
         operator chose, which is where it can be tested.
         """
         self._camera = build_camera(self.host, self.port, self.username, self.password)
-        await asyncio.wait_for(self._camera.update_xaddrs(), timeout=PROBE_TIMEOUT_SECONDS)
-        await self._subscribe()
+        try:
+            await asyncio.wait_for(self._camera.update_xaddrs(), timeout=PROBE_TIMEOUT_SECONDS)
+            await self._subscribe()
+        except BaseException:
+            # **Close the session before giving up.** Every other call in this
+            # module builds its camera inside a try/finally; this one did not,
+            # so a camera that was unreachable - a power cut, which is when
+            # the listener retries hardest - leaked one aiohttp session per
+            # attempt, forever. A real install logged 10,659 "Unclosed client
+            # session" errors in a day. Found in QA, 2026-11-03.
+            await self.close()
+            raise
 
     async def _subscribe(self) -> None:
         """Create the subscription and bind a client that can talk to it."""

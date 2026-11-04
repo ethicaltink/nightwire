@@ -106,13 +106,39 @@ def camera_id_from_relative(relative: str) -> str | None:
     return parts[0]
 
 
+def _resolve_ambiguous(naive, tz, mtime: float | None):
+    """Pick which of a repeated local hour a filename means.
+
+    **The autumn DST fall-back repeats an hour of local time**, so for one
+    hour a year `20261101T013000` names two different instants and
+    `datetime.replace(tzinfo=tz)` silently picks the first (`fold=0`). On a
+    real install that put the whole second pass an hour early, exactly on top
+    of the first: 60 segments per camera stamped into an hour that already
+    had 60, the real hour showing as a 60-minute gap on the timeline, and the
+    playlist for that range carrying two overlapping fragments at every
+    instant. Found in the first QA of a multi-day install, 2026-11-03, after
+    the 2026-11-01 change.
+
+    The file's mtime is an unambiguous UTC instant, so it decides. It is the
+    time of the segment's last write, up to a segment length after its start,
+    which is nowhere near the hour that separates the two candidates.
+    """
+    first = naive.replace(tzinfo=tz, fold=0)
+    second = naive.replace(tzinfo=tz, fold=1)
+    if mtime is None or first.utcoffset() == second.utcoffset():
+        # Not an ambiguous hour, or nothing to disambiguate with.
+        return first
+    return min(first, second, key=lambda candidate: abs(candidate.timestamp() - mtime))
+
+
 def segment_start_ms(path: Path, tz: timezone | None, mtime: float | None = None) -> int:
     """Wall-clock start of a segment, as unix milliseconds UTC.
 
-    The filename is authoritative, interpreted in `tz`. If the file's mtime
-    disagrees by more than a day the clock or time zone changed under us, so
-    the mtime wins: a segment's timestamp being an hour out is survivable, a
-    year out is not.
+    The filename is authoritative, interpreted in `tz` - including which side
+    of a DST fall-back it falls on, see `_resolve_ambiguous`. If the file's
+    mtime disagrees by more than a day the clock or time zone changed under
+    us, so the mtime wins: a segment's timestamp being an hour out is
+    survivable, a year out is not.
     """
     naive = parse_filename(path.name)
     if naive is None:
@@ -120,7 +146,11 @@ def segment_start_ms(path: Path, tz: timezone | None, mtime: float | None = None
             raise ValueError(f"{path.name} is not a segment filename")
         return int(mtime * 1000)
 
-    aware = naive.replace(tzinfo=tz) if tz is not None else naive.replace(tzinfo=timezone.utc)
+    aware = (
+        _resolve_ambiguous(naive, tz, mtime)
+        if tz is not None
+        else naive.replace(tzinfo=timezone.utc)
+    )
     from_name = int(aware.timestamp() * 1000)
     if mtime is not None and abs(int(mtime * 1000) - from_name) > 86_400_000:
         return int(mtime * 1000)

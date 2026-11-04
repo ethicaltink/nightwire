@@ -110,15 +110,21 @@ class FakePullPoint:
     can check that the listener closes open events on reconnect.
     """
 
-    def __init__(self, batches: list[list[dict]], *, then=None) -> None:
+    def __init__(self, batches: list[list[dict]], *, then=None, connect_error=None) -> None:
         self.batches = list(batches)
         self.then = then or ConnectionError("subscription dropped")
+        self.connect_error = connect_error
         self.connected = False
         self.closed = False
         self.renewals = 0
         self.topics: list[str] = []
 
     async def connect(self, topics=None) -> None:
+        # `connect_error` is a camera that is simply not there - a power cut,
+        # which is when the listener retries hardest and so when a session
+        # leaked on this path hurts most.
+        if self.connect_error is not None:
+            raise self.connect_error
         self.connected = True
         self.topics = list(topics or [])
 

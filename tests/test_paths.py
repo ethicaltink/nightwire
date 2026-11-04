@@ -122,3 +122,46 @@ def test_prune_never_escapes_the_volume(tmp_path):
     outside = tmp_path.parent
     assert paths.prune_empty_dirs(outside, tmp_path) == 0
     assert outside.is_dir()
+
+
+# The autumn DST fall-back: on 2026-11-01 America/Chicago repeats 01:00-01:59,
+# so `20261101T013000` names two instants an hour apart. Picking the wrong one
+# put a whole hour of footage on top of the hour before it on a real install.
+
+DST_LOCAL_NAME = Path("20261101T013000.ts")
+FIRST_PASS_UTC = datetime(2026, 11, 1, 6, 30, tzinfo=timezone.utc)   # 01:30 CDT
+SECOND_PASS_UTC = datetime(2026, 11, 1, 7, 30, tzinfo=timezone.utc)  # 01:30 CST
+
+
+def _chicago():
+    from zoneinfo import ZoneInfo
+
+    return ZoneInfo("America/Chicago")
+
+
+def test_the_repeated_dst_hour_is_resolved_by_mtime():
+    tz = _chicago()
+    # mtime is the segment's last write, a minute or so after its start.
+    first = paths.segment_start_ms(DST_LOCAL_NAME, tz, mtime=FIRST_PASS_UTC.timestamp() + 55)
+    second = paths.segment_start_ms(DST_LOCAL_NAME, tz, mtime=SECOND_PASS_UTC.timestamp() + 55)
+    assert first == int(FIRST_PASS_UTC.timestamp() * 1000)
+    assert second == int(SECOND_PASS_UTC.timestamp() * 1000)
+    # The whole point: the same filename resolves to two different instants.
+    assert second - first == 3_600_000
+
+
+def test_an_unambiguous_hour_is_unaffected_by_mtime_noise():
+    tz = _chicago()
+    name = Path("20261103T013000.ts")
+    expected = datetime(2026, 11, 3, 7, 30, tzinfo=timezone.utc)
+    for drift in (-120, 0, 55, 600):
+        assert paths.segment_start_ms(name, tz, mtime=expected.timestamp() + drift) == int(
+            expected.timestamp() * 1000
+        )
+
+
+def test_the_repeated_hour_falls_back_to_the_first_pass_without_an_mtime():
+    """No mtime, no way to tell: the earlier instant, as before."""
+    assert paths.segment_start_ms(DST_LOCAL_NAME, _chicago()) == int(
+        FIRST_PASS_UTC.timestamp() * 1000
+    )

@@ -302,3 +302,60 @@ def test_the_fake_pullpoint_behaves_like_a_subscription():
     first, second = asyncio.run(drive())
     assert len(first) == 1 and second == []
     assert point.connected and point.closed and point.renewals == 1
+
+
+# ------------------------------------------------- teardown on a failed camera
+
+
+def test_a_camera_that_will_not_connect_is_still_closed(tmp_path, monkeypatch):
+    """A power cut is when the listener retries hardest.
+
+    `connect` used to run outside the teardown, so every failed attempt
+    against an unreachable camera leaked its HTTP session. A real install
+    logged 10,659 "Unclosed client session" errors in a day after an outage.
+    """
+    conn, supervisor, listener = build(tmp_path)
+    made = []
+
+    def fake_pullpoint(host, port, username, password):
+        point = fake.FakePullPoint([], connect_error=ConnectionError("camera is down"))
+        made.append(point)
+        return point
+
+    monkeypatch.setattr("nightwire.events.listener.onvif.PullPoint", fake_pullpoint)
+    sources = store.enabled_sources(conn, "front")
+
+    async def drive():
+        await supervisor._subscribe_and_pull(listener, sources)
+
+    try:
+        asyncio.run(drive())
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("the failure should reach the caller's backoff")
+
+    assert made, "the listener never built a pullpoint"
+    assert made[0].closed, "the pullpoint was left open after a failed connect"
+
+
+def test_a_subscription_that_drops_is_closed_too(tmp_path, monkeypatch):
+    conn, supervisor, listener = build(tmp_path)
+    made = []
+
+    def fake_pullpoint(host, port, username, password):
+        point = fake.FakePullPoint([[fake.motion(T0, True)]])
+        made.append(point)
+        return point
+
+    monkeypatch.setattr("nightwire.events.listener.onvif.PullPoint", fake_pullpoint)
+    sources = store.enabled_sources(conn, "front")
+
+    async def drive():
+        await supervisor._subscribe_and_pull(listener, sources)
+
+    try:
+        asyncio.run(drive())
+    except ConnectionError:
+        pass
+    assert made[0].connected and made[0].closed

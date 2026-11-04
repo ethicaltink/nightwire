@@ -232,6 +232,14 @@ class EventSupervisor:
         topics = sorted({source["topic"] for source in sources})
 
         point = onvif.PullPoint(row["host"], row["onvif_port"], username, password)
+        try:
+            await self._subscribed_loop(listener, sources, point, topics)
+        finally:
+            # Inside the finally, because `connect` itself is what fails when
+            # a camera is down and its session has to be closed either way.
+            await point.close()
+
+    async def _subscribed_loop(self, listener, sources, point, topics) -> None:
         await point.connect(topics)
         listener.subscribed_at = time.monotonic()
         listener.state = STATE_SUBSCRIBED
@@ -240,16 +248,13 @@ class EventSupervisor:
         log.info("events %s: subscribed to %d topic(s)", listener.camera_id, len(topics))
 
         last_renew = time.monotonic()
-        try:
-            while not self._stopping.is_set():
-                notifications = await point.pull(PULL_TIMEOUT_SECONDS, PULL_LIMIT)
-                if notifications:
-                    self._handle(listener, notifications)
-                if time.monotonic() - last_renew >= RENEW_EVERY_SECONDS:
-                    await point.renew()
-                    last_renew = time.monotonic()
-        finally:
-            await point.close()
+        while not self._stopping.is_set():
+            notifications = await point.pull(PULL_TIMEOUT_SECONDS, PULL_LIMIT)
+            if notifications:
+                self._handle(listener, notifications)
+            if time.monotonic() - last_renew >= RENEW_EVERY_SECONDS:
+                await point.renew()
+                last_renew = time.monotonic()
 
     async def _cap_loop(self) -> None:
         """Enforce the 10-minute cap on anything left open."""
